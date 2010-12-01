@@ -137,9 +137,8 @@ expand_sources([Spec | Rest], Acc) ->
     expand_sources(Rest, Acc2).
     
 expand_objects(Sources) ->
-  lists:map(fun(File) ->
-      filename:join([filename:dirname(File),filename:basename(File) ++ ".o"])
-    end, Sources).
+    [filename:join([filename:dirname(F), filename:basename(F) ++ ".o"])
+     || F <- Sources].
 
 run_precompile_hook(Config, Env) ->
     case rebar_config:get(Config, port_pre_script, undefined) of
@@ -307,14 +306,15 @@ erts_dir() ->
     lists:concat([code:root_dir(), "/erts-", erlang:system_info(version)]).
 
 os_env() ->
-    [list_to_tuple(re:split(S, "=", [{return, list}, {parts, 2}])) || S <- os:getenv()].
+    Os = [list_to_tuple(re:split(S, "=", [{return, list}, {parts, 2}])) || S <- os:getenv()],
+    lists:keydelete([],1,Os). %% Remove Windows current disk and path
 
 default_env() ->
     [
      {"CC", "cc"},
      {"CXX", "c++"},
      {"ERL_CFLAGS", lists:concat([" -I", code:lib_dir(erl_interface, include),
-                                  " -I", filename:join(erts_dir(), include),
+                                  " -I", filename:join(erts_dir(), "include"),
                                   " "])},
      {"ERL_LDFLAGS", lists:concat([" -L", code:lib_dir(erl_interface, lib),
                                    " -lerl_interface -lei"])},
@@ -344,6 +344,24 @@ source_to_bin(Source) ->
     filename:rootname(Source, Ext) ++ ".o".
 
 so_specs(Config, AppFile, Bins) ->
+    Specs = make_so_specs(Config, AppFile, Bins),
+    case os:type() of
+        {win32, nt} ->
+            [switch_so_to_dll(SoSpec) || SoSpec <- Specs];
+        _ ->
+            Specs
+    end.
+
+switch_so_to_dll(Orig = {Name, Spec}) ->
+    case filename:extension(Name) of
+        ".so" ->
+            {filename:rootname(Name, ".so") ++ ".dll", Spec};
+        _ ->
+            %% Not a .so; leave it
+            Orig
+    end.
+
+make_so_specs(Config, AppFile, Bins) ->
     case rebar_config:get(Config, so_specs, undefined) of
         undefined ->
             %% New form of so_specs is not provided. See if the old form of {so_name} is available

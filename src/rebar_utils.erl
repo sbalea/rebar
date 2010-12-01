@@ -77,8 +77,9 @@ get_os() ->
 sh(Command, Env) ->
     sh(Command, Env, get_cwd()).
 
-sh(Command, Env, Dir) ->
-    ?INFO("sh: ~s\n~p\n", [Command, Env]),
+sh(Command0, Env, Dir) ->
+    ?INFO("sh: ~s\n~p\n", [Command0, Env]),
+    Command = patch_on_windows(Command0, os:type()),
     Port = open_port({spawn, Command}, [{cd, Dir}, {env, Env}, exit_status, {line, 16384},
                                         use_stdio, stderr_to_stdout]),
     case sh_loop(Port) of
@@ -87,6 +88,18 @@ sh(Command, Env, Dir) ->
         {error, Rc} ->
             ?ABORT("~s failed with error: ~w\n", [Command, Rc])
     end.
+
+
+%% We need a bash shell to execute on windows
+%% also the port doesn't seem to close from time to time (mingw)
+patch_on_windows(Cmd, {win32,nt}) ->
+    case find_executable("bash") of
+        false -> Cmd;
+        Bash -> 
+            Bash ++ " -c \"" ++ Cmd ++ "; echo _port_cmd_status_ $?\" "
+    end;
+patch_on_windows(Command, _) ->
+    Command.
 
 sh_failfast(Command, Env) ->
     sh(Command, Env).
@@ -99,7 +112,8 @@ now_str() ->
     lists:flatten(io_lib:format("~4b/~2..0b/~2..0b ~2..0b:~2..0b:~2..0b",
 				[Year, Month, Day, Hour, Minute, Second])).
 
-%% TODO: filelib:ensure_dir/1 corrected in R13B04. Can be removed.
+%% TODO: filelib:ensure_dir/1 corrected in R13B04. Remove when we drop
+%% support for OTP releases older than R13B04.
 ensure_dir(Path) ->
     case filelib:ensure_dir(Path) of
         ok ->
@@ -110,13 +124,14 @@ ensure_dir(Path) ->
             Error
     end.
 
+-spec abort(string(), [term()]) -> no_return().
 abort(String, Args) ->
     ?ERROR(String, Args),
     halt(1).
 
 %% TODO: Rename emulate_escript_foldl to escript_foldl and remove
 %% this function when the time is right. escript:foldl/3 was an
-%% undocumented exported fun and is going to be removed post-R13B04.
+%% undocumented exported fun and has been removed in R14.
 escript_foldl(Fun, Acc, File) ->
     {module, zip} = code:ensure_loaded(zip),
     case erlang:function_exported(zip, foldl, 3) of
@@ -127,7 +142,11 @@ escript_foldl(Fun, Acc, File) ->
     end.
 
 find_executable(Name) ->
-    "\"" ++ filename:nativename(os:find_executable(Name)) ++ "\"".
+    case os:find_executable(Name) of
+        false -> false;
+        Path ->
+            "\"" ++ filename:nativename(Path) ++ "\""
+    end.
 
 %% ====================================================================
 %% Internal functions
@@ -145,6 +164,12 @@ match_first([{Regex, MatchValue} | Rest], Val) ->
 
 sh_loop(Port) ->
     receive
+        {Port, {data, {_, "_port_cmd_status_ " ++ Status}}} ->
+            (catch erlang:port_close(Port)), % sigh () for indentation
+            case list_to_integer(Status) of
+                0  -> ok;
+                Rc -> {error, Rc}
+            end;
         {Port, {data, {_, Line}}} ->
             ?CONSOLE("~s\n", [Line]),
             sh_loop(Port);
@@ -180,6 +205,6 @@ emulate_escript_foldl(Fun, Acc, File) ->
                 {archive, ArchiveBin} ->
                     zip:foldl(Fun, Acc, {File, ArchiveBin})
             end;
-        {error, Reason} ->
-            {error, Reason}
+        {error, _} = Error ->
+            Error
     end.

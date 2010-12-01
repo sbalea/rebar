@@ -8,6 +8,18 @@
 %% Additional library directories to add to the code path
 {lib_dirs, []}.
 
+%% Command to run before compiling
+{compile_pre_script, "./script.sh"}.
+
+%% Command to run after compiling
+{compile_post_script, "./script.sh"}.
+
+%% Command to run before cleaning
+{clean_pre_script, "./script.sh"}.
+
+%% Command to run after cleaning
+{clean_post_script, "./script.sh"}.
+
 %% == Erlang Compiler ==
 
 %% Erlang files to compile before the rest. Rebar automatically compiles
@@ -26,6 +38,11 @@
 
 %% SNMP mibs to compile first?
 {mib_first_files, []}.
+
+%% == EDoc ==
+
+%% EDoc options
+{edoc_opts, []}.
 
 %% == Port Compiler ==
 
@@ -71,10 +88,16 @@
 %% Whether to enable coverage reporting. Default is `false'
 {cover_enabled, false}.
 
+%% Whether to print coverage report to console. Default is `false'
+{cover_print_enabled, false}.
+
 %% == Dialyzer ==
 
-%% Options for running the dialyzer, right now only `plt' is supported
-{dialyzer_opts, []}.
+%% Options for running dialyzer
+%% {plt, PltFile}
+%% 'src': run Dialyzer on the source files as in 'dialyzer --src'
+%% {warnings, [WarnOpts]}: turn on/off Dialyzer warnings
+{dialyzer_opts, [{plt, PltFile}, {warnings, [WarnOpts]}, src]}.
 
 %% == Cleanup ==
 
@@ -90,6 +113,9 @@
 
 %% Binaries to link into the erlang path?
 {app_bin, []}.
+
+%% Enable validation of the OTP app module list. Default is 'true'
+{validate_app_modules, true}.
 
 %% == Dependancies ==
 

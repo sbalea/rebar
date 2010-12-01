@@ -74,13 +74,7 @@ clean(_Config, _AppFile) ->
 %% ===================================================================
 
 protobuffs_is_present() ->
-    case code:which(protobuffs_compile) of
-        non_existing ->
-            false;
-        _ ->
-            true
-    end.
-
+    code:which(protobuffs_compile) =/= non_existing.
 
 beam_file(Proto) ->
     filename:basename(Proto, ".proto") ++ "_pb.beam".
@@ -110,7 +104,7 @@ compile_each([{Proto, Beam, Hrl} | Rest]) ->
                     %% into the ebin/ and include/ directories respectively
                     %% TODO: Protobuffs really needs to be better about this...sigh.
                     [] = os:cmd(?FMT("mv ~s ebin", [Beam])),
-                    filelib:ensure_dir(filename:join("include", Hrl)),
+                    ok = filelib:ensure_dir(filename:join("include", Hrl)),
                     [] = os:cmd(?FMT("mv ~s include", [Hrl])),
                     ok;
                 Other ->

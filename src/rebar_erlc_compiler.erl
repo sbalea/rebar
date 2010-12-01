@@ -72,10 +72,8 @@ compile(Config, _AppFile) ->
 
 -spec clean(Config::#config{}, AppFile::string()) -> 'ok'.
 clean(_Config, _AppFile) ->
-    %% TODO: This would be more portable if it used Erlang to traverse
-    %%       the dir structure and delete each file; however it would also
-    %%       much slower.
-    ok = rebar_file_utils:rm_rf("ebin/*.beam priv/mibs/*.bin"),
+    lists:foreach(fun(F) -> ok = rebar_file_utils:rm_rf(F) end,
+                  ["ebin/*.beam", "priv/mibs/*.bin"]),
 
     YrlFiles = rebar_utils:find_files("src", "^.*\\.[x|y]rl\$"),
     rebar_file_utils:delete_each(
@@ -102,30 +100,47 @@ doterl_compile(Config, OutDir) ->
 
 doterl_compile(Config, OutDir, MoreSources) ->
     FirstErls = rebar_config:get_list(Config, erl_first_files, []),
-    ErlOpts = filter_defines(rebar_config:get(Config, erl_opts, []), []),
+    RawErlOpts = filter_defines(rebar_config:get(Config, erl_opts, []), []),
+    ErlOpts =
+        case rebar_config:get_global(debug_info, "0") of
+            "0" ->
+                RawErlOpts;
+            _ ->
+                [debug_info|RawErlOpts]
+        end,
     ?DEBUG("erl_opts ~p~n",[ErlOpts]),
     %% Support the src_dirs option allowing multiple directories to
-    %% contain erlang source. This might be used, for example, should eunit tests be
-    %% separated from the core application source.
+    %% contain erlang source. This might be used, for example, should
+    %% eunit tests be separated from the core application source.
     SrcDirs = src_dirs(proplists:append_values(src_dirs, ErlOpts)),
     RestErls  = [Source || Source <- gather_src(SrcDirs, []) ++ MoreSources,
-                           lists:member(Source, FirstErls) == false],
+                           not lists:member(Source, FirstErls)],
 
-    % Sort RestErls so that parse_transforms and behaviours are first
+    % Split RestErls so that parse_transforms and behaviours are instead added
+    % to erl_first_files, parse transforms first.
     % This should probably be somewhat combined with inspect_epp
-    SortedRestErls = [K || {K, _V} <- lists:keysort(2,
-        [{F, compile_priority(F)} || F <- RestErls ])],
+    [ParseTransforms, Behaviours, OtherErls] = lists:foldl(fun(F, [A, B, C]) ->
+                case compile_priority(F) of
+                    parse_transform ->
+                        [[F | A], B, C];
+                    behaviour ->
+                        [A, [F | B], C];
+                    _ ->
+                        [A, B, [F | C]]
+                end
+        end, [[], [], []], RestErls),
 
+    NewFirstErls = FirstErls ++ ParseTransforms ++ Behaviours,
 
     %% Make sure that ebin/ exists and is on the path
     ok = filelib:ensure_dir(filename:join("ebin", "dummy.beam")),
     CurrPath = code:get_path(),
-    code:add_path("ebin"),
-    rebar_base_compiler:run(Config, FirstErls, SortedRestErls,
-                            fun(S, C) -> internal_erl_compile(S, C, OutDir,
-                                                              ErlOpts)
+    true = code:add_path("ebin"),
+    rebar_base_compiler:run(Config, NewFirstErls, OtherErls,
+                            fun(S, C) ->
+                                    internal_erl_compile(S, C, OutDir, ErlOpts)
                             end),
-    code:set_path(CurrPath),
+    true = code:set_path(CurrPath),
     ok.
 
 
@@ -138,7 +153,7 @@ include_path(Source, Config) ->
     ErlOpts = rebar_config:get(Config, erl_opts, []),
     ["include", filename:dirname(Source)] ++ proplists:get_all_values(i, ErlOpts).
 
--spec inspect(Source::string(), IncludePath::[string()]) -> {string(), [string()]}.
+-spec inspect(Source::string(), IncludePath::[string(),...]) -> {string(), [string()]}.
 inspect(Source, IncludePath) ->
     ModuleDefault = filename:basename(Source, ".erl"),
     case epp:open(Source, IncludePath) of
@@ -237,24 +252,24 @@ compile_mib(Source, Target, Config) ->
 compile_xrl(Source, Target, Config) ->
     Opts = [{scannerfile, Target}, {return, true}
             |rebar_config:get(Config, xrl_opts, [])],
-    compile_xrl_yrl(Source, Target, Config, Opts, leex).
+    compile_xrl_yrl(Source, Target, Opts, leex).
 
 -spec compile_yrl(Source::string(), Target::string(), Config::#config{}) -> 'ok'.
 compile_yrl(Source, Target, Config) ->
     Opts = [{parserfile, Target}, {return, true}
             |rebar_config:get(Config, yrl_opts, [])],
-    compile_xrl_yrl(Source, Target, Config, Opts, yecc).
+    compile_xrl_yrl(Source, Target, Opts, yecc).
 
--spec compile_xrl_yrl(Source::string(), Target::string(), Config::#config{},
-                      Opts::list(), Mod::atom()) -> 'ok'.
-compile_xrl_yrl(Source, Target, Config, Opts, Mod) ->
+-spec compile_xrl_yrl(Source::string(), Target::string(), Opts::list(),
+                      Mod::atom()) -> 'ok'.
+compile_xrl_yrl(Source, Target, Opts, Mod) ->
     case needs_compile(Source, Target, []) of
         true ->
             case Mod:file(Source, Opts) of
                 {ok, _, []} ->
                     ok;
                 {ok, _, _Warnings} ->
-                    case lists:member(fail_on_warnings, Config) of
+                    case lists:member(fail_on_warning, Opts) of
                         true ->
                             ?FAIL;
                         false ->
@@ -272,7 +287,7 @@ gather_src([], Srcs) ->
 gather_src([Dir|Rest], Srcs) ->
     gather_src(Rest, Srcs ++ rebar_utils:find_files(Dir, ".*\\.erl\$")).
 
--spec src_dirs(SrcDirs::[string()]) -> [string()].
+-spec src_dirs(SrcDirs::[string()]) -> [string(),...].
 src_dirs([]) ->
     ["src"];
 src_dirs(SrcDirs) ->
@@ -289,20 +304,21 @@ delete_dir(Dir, Subdirs) ->
     lists:foreach(fun(D) -> delete_dir(D, dirs(D)) end, Subdirs),
     file:del_dir(Dir).
 
--spec compile_priority(File::string()) -> pos_integer().
+-spec compile_priority(File::string()) -> 'normal' | 'behaviour' |
+                                          'parse_transform'.
 compile_priority(File) ->
     case epp_dodger:parse_file(File) of
         {error, _} ->
-            10; % couldn't parse the file, default priority
+            normal; % couldn't parse the file, default priority
         {ok, Trees} ->
             F2 = fun({tree,arity_qualifier,_,
                         {arity_qualifier,{tree,atom,_,behaviour_info},
                             {tree,integer,_,1}}}, _) ->
-                    2;
+                    behaviour;
                 ({tree,arity_qualifier,_,
                         {arity_qualifier,{tree,atom,_,parse_transform},
                             {tree,integer,_,2}}}, _) ->
-                    1;
+                    parse_transform;
                 (_, Acc) ->
                     Acc
             end,
@@ -314,7 +330,7 @@ compile_priority(File) ->
                     Acc
             end,
 
-            lists:foldl(F, 10, Trees)
+            lists:foldl(F, normal, Trees)
     end.
 
 %%

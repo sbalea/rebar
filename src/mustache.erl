@@ -47,7 +47,7 @@ compile(Mod) ->
 
 compile(Mod, File) ->
   code:purge(Mod),
-  code:load_file(Mod),
+  {module, _} = code:load_file(Mod),
   {ok, TemplateBin} = file:read_file(File),
   Template = re:replace(TemplateBin, "\"", "\\\\\"", [global, {return,list}]),
   State = #mstate{mod = Mod},
@@ -171,13 +171,13 @@ get(Key, Ctx, Mod) ->
     error ->
       case erlang:function_exported(Mod, Key, 1) of
         true ->
-          Val = to_s(apply(Mod, Key, [Ctx])),
+          Val = to_s(Mod:Key(Ctx)),
           % io:format("From Mod/1 {~p, ~p}~n", [Key, Val]),
           Val;
         false ->
           case erlang:function_exported(Mod, Key, 0) of
             true ->
-              Val = to_s(apply(Mod, Key, [])),
+              Val = to_s(Mod:Key()),
               % io:format("From Mod/0 {~p, ~p}~n", [Key, Val]),
               Val;
             false ->

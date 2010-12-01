@@ -58,8 +58,10 @@
     %% Build a list of available templates
     AvailTemplates = find_disk_templates() ++ find_escript_templates(),
     ?CONSOLE("Available templates:\n", []),
-    [?CONSOLE("\t* ~s: ~s (~p)\n", [filename:basename(F, ".template"), F, Type]) ||
-        {Type, F} <- AvailTemplates],
+    _ = [begin
+             BaseName = filename:basename(F, ".template"),
+             ?CONSOLE("\t* ~s: ~s (~p)\n", [BaseName, F, Type])
+         end || {Type, F} <- AvailTemplates],
     ok.
 
 
@@ -82,8 +84,8 @@ create(_Config, _) ->
     %% Load the template definition as is and get the list of variables the
     %% template requires.
     TemplateTerms = consult(load_file(Type, Template)),
-    case lists:keysearch(variables, 1, TemplateTerms) of
-        {value, {variables, Vars}} ->
+    case lists:keyfind(variables, 1, TemplateTerms) of
+        {variables, Vars} ->
             case parse_vars(Vars, dict:new()) of
                 {error, Entry} ->
                     Context0 = undefined,
@@ -244,7 +246,7 @@ write_file(Output, Data, Force) ->
     %% otherwise just process the next template
     if
         Force =:= "1"; FileExists =:= false ->
-            filelib:ensure_dir(Output),
+            ok = filelib:ensure_dir(Output),
             if
                 {Force, FileExists} =:= {"1", true} ->
                     ?CONSOLE("Writing ~s (forcibly overwriting)~n",
@@ -268,8 +270,8 @@ write_file(Output, Data, Force) ->
 %% Execute each instruction in a template definition file.
 %%
 execute_template([], _TemplateType, _TemplateName, _Context, _Force, ExistingFiles) ->
-    case length(ExistingFiles) of
-        0 ->
+    case ExistingFiles of
+        [] ->
             ok;
         _ ->
             Msg = lists:flatten([io_lib:format("\t* ~p~n", [F]) || F <- lists:reverse(ExistingFiles)]),
