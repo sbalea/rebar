@@ -1,4 +1,4 @@
-%% -*- tab-width: 4;erlang-indent-level: 4;indent-tabs-mode: nil -*-
+%% -*- erlang-indent-level: 4;indent-tabs-mode: nil -*-
 %% ex: ts=4 sw=4 et
 %% -------------------------------------------------------------------
 %%
@@ -71,51 +71,53 @@ run_test(TestDir, Config, _File) ->
             Output = " 2>&1 | tee -a " ++ RawLog
     end,
 
-    rebar_utils:sh(Cmd ++ Output, [{"TESTDIR", TestDir}]),
+    rebar_utils:sh(Cmd ++ Output, [{env,[{"TESTDIR", TestDir}]}]),
     check_log(RawLog).
 
 
 clear_log(RawLog) ->
     case filelib:ensure_dir("logs/index.html") of
-	ok ->
-	    NowStr = rebar_utils:now_str(),
-	    LogHeader = "--- Test run on " ++ NowStr ++ " ---\n",
-	    ok = file:write_file(RawLog, LogHeader);
-	{error, Reason} ->
-	    ?ERROR("Could not create log dir - ~p\n", [Reason]),
-	    ?FAIL
+        ok ->
+            NowStr = rebar_utils:now_str(),
+            LogHeader = "--- Test run on " ++ NowStr ++ " ---\n",
+            ok = file:write_file(RawLog, LogHeader);
+        {error, Reason} ->
+            ?ERROR("Could not create log dir - ~p\n", [Reason]),
+            ?FAIL
     end.
 
 %% calling ct with erl does not return non-zero on failure - have to check
 %% log results
 check_log(RawLog) ->
-    Msg = os:cmd("grep -e 'TEST COMPLETE' -e '{error,make_failed}' " ++ RawLog),
+    {ok, Msg} =
+        rebar_utils:sh("grep -e 'TEST COMPLETE' -e '{error,make_failed}' "
+                       ++ RawLog, [{use_stdout, false}]),
     MakeFailed = string:str(Msg, "{error,make_failed}") =/= 0,
     RunFailed = string:str(Msg, ", 0 failed") =:= 0,
     if
         MakeFailed ->
-	    show_log(RawLog),
-	    ?ERROR("Building tests failed\n",[]),
-	    ?FAIL;
+            show_log(RawLog),
+            ?ERROR("Building tests failed\n",[]),
+            ?FAIL;
 
         RunFailed ->
-	    show_log(RawLog),
-	    ?ERROR("One or more tests failed\n",[]),
-	    ?FAIL;
+            show_log(RawLog),
+            ?ERROR("One or more tests failed\n",[]),
+            ?FAIL;
 
-	true ->
-	    ?CONSOLE("DONE. ~s\n", [Msg])
+        true ->
+            ?CONSOLE("DONE. ~s\n", [Msg])
     end.
 
 %% Show the log if it hasn't already been shown because verbose was on
 show_log(RawLog) ->
     ?CONSOLE("Showing log\n", []),
     case rebar_config:get_global(verbose, "0") of
-	"0" ->
-	    {ok, Contents} = file:read_file(RawLog),
-	    ?CONSOLE("~s", [Contents]);
-	_ ->
-	    ok
+        "0" ->
+            {ok, Contents} = file:read_file(RawLog),
+            ?CONSOLE("~s", [Contents]);
+        _ ->
+            ok
     end.
 
 make_cmd(TestDir, Config) ->
@@ -123,58 +125,96 @@ make_cmd(TestDir, Config) ->
     LogDir = filename:join(Cwd, "logs"),
     EbinDir = filename:absname(filename:join(Cwd, "ebin")),
     IncludeDir = filename:join(Cwd, "include"),
-    case filelib:is_dir(IncludeDir) of
-        true ->
-            Include = " -I \"" ++ IncludeDir ++ "\"";
-        false ->
-            Include = ""
-    end,
+    Include = case filelib:is_dir(IncludeDir) of
+                  true ->
+                      " -include \"" ++ IncludeDir ++ "\"";
+                  false ->
+                      ""
+              end,
 
-    Cmd = ?FMT("erl " % should we expand ERL_PATH?
-               " -noshell -pa \"~s\" ~s"
-               " -s ct_run script_start -s erlang halt"
-               " -name test@~s"
-               " -logdir \"~s\""
-               " -env TEST_DIR \"~s\"",
-               [EbinDir,
-                Include,
-                net_adm:localhost(),
-                LogDir,
-                filename:join(Cwd, TestDir)]) ++
-        get_cover_config(Config, Cwd) ++
-        get_ct_config_file(TestDir) ++
-        get_config_file(TestDir) ++
-        get_suite(TestDir) ++
-        get_case(),
+    %% Add the code path of the rebar process to the code path. This
+    %% includes the dependencies in the code path. The directories
+    %% that are part of the root Erlang install are filtered out to
+    %% avoid duplication
+    R = code:root_dir(),
+    NonLibCodeDirs = [P || P <- code:get_path(), not lists:prefix(R, P)],
+    CodeDirs = [io_lib:format("\"~s\"", [Dir]) ||
+                   Dir <- [EbinDir|NonLibCodeDirs]],
+    CodePathString = string:join(CodeDirs, " "),
+    Cmd = case get_ct_specs(Cwd) of
+              undefined ->
+                  ?FMT("erl " % should we expand ERL_PATH?
+                       " -noshell -pa ~s ~s"
+                       " -s ct_run script_start -s erlang halt"
+                       " -name test@~s"
+                       " -logdir \"~s\""
+                       " -env TEST_DIR \"~s\"",
+                       [CodePathString,
+                        Include,
+                        net_adm:localhost(),
+                        LogDir,
+                        filename:join(Cwd, TestDir)]) ++
+                      get_cover_config(Config, Cwd) ++
+                      get_ct_config_file(TestDir) ++
+                      get_config_file(TestDir) ++
+                      get_suite(TestDir) ++
+                      get_case();
+              SpecFlags ->
+                  ?FMT("erl " % should we expand ERL_PATH?
+                       " -noshell -pa ~s ~s"
+                       " -s ct_run script_start -s erlang halt"
+                       " -name test@~s"
+                       " -logdir \"~s\""
+                       " -env TEST_DIR \"~s\"",
+                       [CodePathString,
+                        Include,
+                        net_adm:localhost(),
+                        LogDir,
+                        filename:join(Cwd, TestDir)]) ++
+                      SpecFlags ++ get_cover_config(Config, Cwd)
+          end,
     RawLog = filename:join(LogDir, "raw.log"),
     {Cmd, RawLog}.
+
+get_ct_specs(Cwd) ->
+    case collect_glob(Cwd, ".*\.test\.spec\$") of
+        [] -> undefined;
+        [Spec] ->
+            " -spec " ++ Spec;
+        Specs ->
+            " -spec " ++
+                lists:flatten([io_lib:format("~s ", [Spec]) || Spec <- Specs])
+    end.
 
 get_cover_config(Config, Cwd) ->
     case rebar_config:get_local(Config, cover_enabled, false) of
         false ->
             "";
         true ->
-            case filelib:fold_files(Cwd, ".*cover\.spec\$", true, fun collect_ct_specs/2, []) of
-				[] ->
-					?DEBUG("No cover spec found: ~s~n", [Cwd]),
-					"";
-				[Spec] ->
-					?DEBUG("Found cover file ~w~n", [Spec]),
-					" -cover " ++ Spec;
-				Specs ->
-					?ABORT("Multiple cover specs found: ~p~n", [Specs])
-			end
-	end.
+            case collect_glob(Cwd, ".*cover\.spec\$") of
+                [] ->
+                    ?DEBUG("No cover spec found: ~s~n", [Cwd]),
+                    "";
+                [Spec] ->
+                    ?DEBUG("Found cover file ~w~n", [Spec]),
+                    " -cover " ++ Spec;
+                Specs ->
+                    ?ABORT("Multiple cover specs found: ~p~n", [Specs])
+            end
+    end.
 
-collect_ct_specs(F, Acc) ->
-    %% Ignore any specs under the deps/ directory. Do this pulling the dirname off the
-    %% the F and then splitting it into a list.
+collect_glob(Cwd, Glob) ->
+    filelib:fold_files(Cwd, Glob, true, fun collect_files/2, []).
+
+collect_files(F, Acc) ->
+    %% Ignore any specs under the deps/ directory. Do this pulling
+    %% the dirname off the the F and then splitting it into a list.
     Parts = filename:split(filename:dirname(F)),
     case lists:member("deps", Parts) of
         true ->
-            Acc;                     % There is a directory named "deps" in path
+            Acc;                % There is a directory named "deps" in path
         false ->
-            [F | Acc]                % No "deps" directory in path
+            [F | Acc]           % No "deps" directory in path
     end.
 
 get_ct_config_file(TestDir) ->

@@ -1,8 +1,3 @@
--record(config, { dir,
-                  opts }).
-
--record(global_state, { working_dir }).
-
 -define(FAIL, throw({error, failed})).
 
 -define(ABORT(Str, Args), rebar_utils:abort(Str, Args)).
@@ -15,4 +10,3 @@
 -define(ERROR(Str, Args), rebar_log:log(error, Str, Args)).
 
 -define(FMT(Str, Args), lists:flatten(io_lib:format(Str, Args))).
-

@@ -1,4 +1,4 @@
-%% -*- tab-width: 4;erlang-indent-level: 4;indent-tabs-mode: nil -*-
+%% -*- erlang-indent-level: 4;indent-tabs-mode: nil -*-
 %% ex: ts=4 sw=4 et
 %% -------------------------------------------------------------------
 %%
@@ -35,6 +35,14 @@
 
 -include("rebar.hrl").
 
+-record(config, { dir :: file:filename(),
+                  opts :: list() }).
+
+%% Types that can be used from other modules -- alphabetically ordered.
+-export_type([config/0]).
+
+%% data types
+-opaque config() :: #config{}.
 
 %% ===================================================================
 %% Public API
@@ -58,20 +66,23 @@ new(ParentConfig) ->
     %% Load terms from rebar.config, if it exists
     Dir = rebar_utils:get_cwd(),
     ConfigFile = filename:join([Dir, ConfName]),
-    case file:consult(ConfigFile) of
-        {ok, Terms} ->
-            %% Found a config file with some terms. We need to be able to
-            %% distinguish between local definitions (i.e. from the file
-            %% in the cwd) and inherited definitions. To accomplish this,
-            %% we use a marker in the proplist (since order matters) between
-            %% the new and old defs.
-            Opts = Terms ++ [local] ++ [Opt || Opt <- ParentConfig#config.opts, Opt /= local];
-        {error, enoent} ->
-            Opts = [local] ++ [Opt || Opt <- ParentConfig#config.opts, Opt /= local];
-        Other ->
-            Opts = undefined, % Keep erlc happy
-            ?ABORT("Failed to load ~s: ~p\n", [ConfigFile, Other])
-    end,
+    Opts = case file:consult(ConfigFile) of
+               {ok, Terms} ->
+                   %% Found a config file with some terms. We need to
+                   %% be able to distinguish between local definitions
+                   %% (i.e. from the file in the cwd) and inherited
+                   %% definitions. To accomplish this, we use a marker
+                   %% in the proplist (since order matters) between
+                   %% the new and old defs.
+                   Terms ++ [local] ++
+                       [Opt || Opt <- ParentConfig#config.opts, Opt /= local];
+               {error, enoent} ->
+                   [local] ++
+                       [Opt || Opt <- ParentConfig#config.opts, Opt /= local];
+               Other ->
+                   ?ABORT("Failed to load ~s: ~p\n", [ConfigFile, Other])
+           end,
+
     #config { dir = Dir, opts = Opts }.
 
 get(Config, Key, Default) ->
@@ -91,7 +102,7 @@ set(Config, Key, Value) ->
     Config#config { opts = [{Key, Value} | Opts] }.
 
 set_global(jobs=Key, Value) when is_list(Value) ->
-    set_global(Key,list_to_integer(Value));
+    set_global(Key, list_to_integer(Value));
 set_global(jobs=Key, Value) when is_integer(Value) ->
     application:set_env(rebar_global, Key, erlang:max(1,Value));
 set_global(Key, Value) ->
